@@ -43,11 +43,23 @@ OWUI_IMAGE="ghcr.io/open-webui/open-webui:main"
 
 After `run`, open `http://localhost:3000`.
 
+By default, the script auto-detects your Mac’s LAN IP for `OLLAMA_BASE_URL`. If you prefer a different interface or the auto-detect picks the wrong one, set `OLLAMA_URL` explicitly as shown above.
+
 ## Networking and security
 
 - Apple `container` isolates containers in a lightweight VM; they cannot reach the host loopback (`127.0.0.1`). Configure Ollama to listen on your Mac’s LAN address.
 - In the Ollama app, enable “Expose Ollama to the network” (or run `OLLAMA_HOST=0.0.0.0 ollama serve`).
 - Exposing Ollama means other devices on your LAN may reach it. Use the macOS firewall to restrict access if needed.
+
+## Troubleshooting
+
+- No models in Open‑WebUI:
+  - Ensure Ollama is exposed to the network (see above).
+  - Prefer a numeric LAN IP over a `.local` hostname for `OLLAMA_BASE_URL`.
+  - Find your IP: `ipconfig getifaddr en0` (try `en7` if needed).
+  - Test connectivity: `OLLAMA_URL=http://<IP>:11434 ./openwebui-apple-container.sh test`.
+  - Re-run with explicit IP: `OLLAMA_URL=http://<IP>:11434 ./openwebui-apple-container.sh run`.
+  - In the WebUI, check Settings → Connections → Ollama base URL.
 
 ## Related doc
 
