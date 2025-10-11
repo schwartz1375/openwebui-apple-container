@@ -22,8 +22,14 @@ OWUI_IMAGE="${OWUI_IMAGE:-ghcr.io/open-webui/open-webui:main}"
 
 # --- helper: pick a stable host URL if none provided ---
 pick_host_url() {
-  # Prefer mDNS hostname if resolvable, else fall back to Wi-Fi IP, then loopback
+  # Prefer numeric LAN IP (works inside container). Fallback to mDNS, then loopback.
   local mdns host ip
+  ip="$(ipconfig getifaddr en0 2>/dev/null || true)"
+  [[ -z "$ip" ]] && ip="$(ipconfig getifaddr en7 2>/dev/null || true)"
+  if [[ -n "$ip" ]]; then
+    echo "http://${ip}:11434"
+    return
+  fi
   mdns="$(scutil --get LocalHostName 2>/dev/null || true)"
   if [[ -n "${mdns:-}" ]]; then
     host="${mdns}.local"
@@ -32,10 +38,8 @@ pick_host_url() {
       return
     fi
   fi
-  ip="$(ipconfig getifaddr en0 2>/dev/null || true)"
-  [[ -z "$ip" ]] && ip="$(ipconfig getifaddr en7 2>/dev/null || true)"
-  [[ -z "$ip" ]] && ip="127.0.0.1"
-  echo "http://${ip}:11434"
+  # Last resort: loopback (unlikely to work from inside container)
+  echo "http://127.0.0.1:11434"
 }
 
 # --- helper: check Ollama binding ---
@@ -72,6 +76,15 @@ run_container() {
 
   echo "Ollama URL: $url"
   check_ollama_bound || true
+  if [[ "$url" == http://*.local:* || "$url" == http://*.local ]]; then
+    echo "NOTE: Using mDNS hostname ($url). Some containers cannot resolve .local."
+    echo "      If models do not appear in Open-WebUI, re-run with:"
+    echo "      OLLAMA_URL=\"http://\$(ipconfig getifaddr en0):11434\" $0 run"
+  fi
+  if [[ "$url" == http://127.0.0.1:* || "$url" == http://127.0.0.1 ]]; then
+    echo "WARN: Using 127.0.0.1 will not be reachable from the container."
+    echo "      Set OLLAMA to listen on 0.0.0.0 and use your LAN IP."
+  fi
 
   echo "Stopping and removing any existing '$OWUI_NAME'..."
   container stop "$OWUI_NAME" >/dev/null 2>&1 || true
