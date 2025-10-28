@@ -20,6 +20,20 @@ OWUI_PORTS="${OWUI_PORTS:-3000:8080}"
 OWUI_DATA="${OWUI_DATA:-$HOME/.open-webui}"
 OWUI_IMAGE="${OWUI_IMAGE:-ghcr.io/open-webui/open-webui:main}"
 
+# --- helper: check container CLI/apiserver version compatibility ---
+check_container_version() {
+  local cli_ver api_ver
+  cli_ver="$(container --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+' | head -1)"
+  api_ver="$(container system status 2>/dev/null | grep 'container-apiserver version' | grep -o '[0-9]\+\.[0-9]\+' | head -1)"
+  
+  if [[ -n "$cli_ver" && -n "$api_ver" && "$cli_ver" != "$api_ver" ]]; then
+    echo "WARNING: Container CLI version ($cli_ver) doesn't match apiserver version ($api_ver)"
+    echo "This may cause port publishing issues. Consider running:"
+    echo "  container system stop && container system start"
+    echo ""
+  fi
+}
+
 # --- helper: pick a stable host URL if none provided ---
 pick_host_url() {
   # Prefer numeric LAN IP (works inside container). Fallback to mDNS, then loopback.
@@ -70,7 +84,62 @@ except Exception as e:
 PY
 }
 
+# --- helper: quick HTTP reachability check (exit 0 on success) ---
+http_ok() {
+  # $1 = URL
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -f --connect-timeout 2 --max-time 5 "$1" >/dev/null 2>&1
+  else
+    python - <<PY >/dev/null 2>&1
+import urllib.request, sys
+u="${1}"
+try:
+    with urllib.request.urlopen(u, timeout=2) as r:
+        sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+  fi
+}
+
+# --- helper: check page looks like Open WebUI ---
+looks_like_openwebui() {
+  # $1 = URL
+  python - <<PY >/dev/null 2>&1
+import urllib.request, sys, re
+u="${1}"
+try:
+    with urllib.request.urlopen(u, timeout=2) as r:
+        body = r.read(4096).decode('utf-8', 'ignore')
+        if re.search(r"open[-_\s]?webui", body, re.I):
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+PY
+}
+
+# --- helper: normalize publish mapping ---
+# Input format: "host:container" (single mapping). Optional OWUI_PUBLISH_STYLE
+#   OWUI_PUBLISH_STYLE=host:container     (default)
+#   OWUI_PUBLISH_STYLE=container:host
+publish_arg() {
+  # Only support single mapping like "3000:8080" for now
+  local spec="$1" h c
+  spec="${spec%%,*}"
+  [[ -z "$spec" ]] && spec="3000:8080"
+  h="${spec%%:*}"; c="${spec##*:}"
+  [[ "$h" =~ ^[0-9]+$ ]] || h=3000
+  [[ "$c" =~ ^[0-9]+$ ]] || c=8080
+  case "${OWUI_PUBLISH_STYLE:-host:container}" in
+    host:container)    printf '%s:%s' "$h" "$c" ;;
+    container:host)    printf '%s:%s' "$c" "$h" ;;
+    *)                 printf '%s:%s' "$h" "$c" ;;
+  esac
+}
+
 run_container() {
+  check_container_version
   local url="${OLLAMA_URL:-$(pick_host_url)}"
   mkdir -p "$OWUI_DATA"
 
@@ -91,15 +160,62 @@ run_container() {
   container rm "$OWUI_NAME" >/dev/null 2>&1 || true
 
   echo "Starting Open-WebUI..."
-  container run \
+  local publish
+  publish="$(publish_arg "$OWUI_PORTS")"
+  echo "Publishing ports: $publish (from '$OWUI_PORTS', style: ${OWUI_PUBLISH_STYLE:-host:container})"
+  
+  # Try --publish first (0.6.0), fallback to --port (0.5.0)
+  if ! container run \
     --detach \
     --name "$OWUI_NAME" \
-    --publish "$OWUI_PORTS" \
+    --publish "$publish" \
     --volume "$OWUI_DATA:/app/backend/data" \
     --env OLLAMA_BASE_URL="$url" \
-    "$OWUI_IMAGE"
+    --memory 2G \
+    --cpus 2 \
+    "$OWUI_IMAGE" 2>/dev/null; then
+    echo "Retrying with --port syntax for older versions..."
+    container run \
+      --detach \
+      --name "$OWUI_NAME" \
+      --port "$publish" \
+      --volume "$OWUI_DATA:/app/backend/data" \
+      --env OLLAMA_BASE_URL="$url" \
+      --memory 2G \
+      --cpus 2 \
+      "$OWUI_IMAGE"
+  fi
 
-  echo "Started. Visit http://localhost:${OWUI_PORTS%%:*}"
+  # Try to detect which host port is actually serving, to handle
+  # potential publish order changes between container versions.
+  local host_p="${OWUI_PORTS%%:*}" cont_p="${OWUI_PORTS##*:}" chosen=""
+  echo "Waiting for Open-WebUI to become reachable..."
+  for i in {1..300}; do
+    for p in "$host_p" "$cont_p"; do
+      [[ -z "$p" || ! "$p" =~ ^[0-9]+$ ]] && continue
+      if http_ok "http://127.0.0.1:${p}/" || http_ok "http://localhost:${p}/"; then
+        chosen="$p"
+        looks_like_openwebui "http://127.0.0.1:${p}/" >/dev/null 2>&1 || true
+        break 2
+      fi
+    done
+    if (( i % 30 == 0 )); then 
+      echo "... still waiting on ports ${host_p}/${cont_p} (${i}s elapsed)"
+      # Show last few log lines to indicate progress
+      container logs open-webui | tail -3 | sed 's/^/    /'
+    fi
+    sleep 1
+  done
+
+  if [[ -n "$chosen" ]]; then
+    echo "Started. Visit http://localhost:${chosen}"
+  else
+    echo "Unable to confirm readiness within timeout."
+    echo "Container status:"
+    container inspect "$OWUI_NAME" 2>/dev/null | python -m json.tool 2>/dev/null | head -20 || true
+    echo "Try: http://localhost:${host_p} or http://localhost:${cont_p}"
+    echo "For detailed status: $0 logs"
+  fi
 }
 
 update_container() {
@@ -114,12 +230,19 @@ update_container() {
 import sys, json
 try:
   data=json.load(sys.stdin)
-  # try variants[0].digest then top-level digest
-  v=data[0].get("variants") or []
-  if v and "digest" in v[0]:
-    print(v[0]["digest"]); raise SystemExit
-  if "digest" in data[0]:
-    print(data[0]["digest"])
+  if isinstance(data, list) and data:
+    img = data[0]
+  else:
+    img = data
+  # try multiple digest locations
+  if "digest" in img:
+    print(img["digest"])
+  elif "variants" in img and img["variants"]:
+    v = img["variants"][0]
+    if "digest" in v:
+      print(v["digest"])
+  elif "id" in img:
+    print(img["id"])
 except Exception: pass
 PY
   )"
@@ -130,7 +253,15 @@ PY
 import sys, json
 try:
   data=json.load(sys.stdin)
-  print((data[0].get("image") or {}).get("digest",""))
+  if isinstance(data, list) and data:
+    container_info = data[0]
+  else:
+    container_info = data
+  img = container_info.get("image") or {}
+  if "digest" in img:
+    print(img["digest"])
+  elif "id" in img:
+    print(img["id"])
 except Exception: pass
 PY
   )"
@@ -140,10 +271,16 @@ PY
     exit 0
   fi
 
+  if [[ -z "$remote" ]]; then
+    echo "Warning: Could not determine image digest, forcing update"
+    remote="unknown"
+  fi
+  
   echo "Updating container to $remote"
   run_container
   echo "Pruning old images..."
-  container image prune -f >/dev/null || true
+  # container 0.6.0 removed '-f' from 'image prune' and may hang
+  timeout 30 container image prune >/dev/null 2>&1 || true
 }
 
 logs_container() {
@@ -157,13 +294,21 @@ test_connectivity() {
   http_get_head "${url%/}/api/tags" | sed -e 's/^{.*/& .../;200q' || true
 }
 
+stop_container() {
+  echo "Stopping Open-WebUI container..."
+  container stop "$OWUI_NAME" 2>/dev/null || echo "Container '$OWUI_NAME' not running"
+  container rm "$OWUI_NAME" 2>/dev/null || echo "Container '$OWUI_NAME' not found"
+  echo "Stopped and removed '$OWUI_NAME'"
+}
+
 case "${1:-run}" in
   run)    run_container ;;
   update) update_container ;;
-  logs)   logs_container ;;
+  logs|log)   logs_container ;;
   test)   test_connectivity ;;
+  stop|kill)  stop_container ;;
   *)
-    echo "Usage: $0 {run|update|logs|test}"
+    echo "Usage: $0 {run|update|logs|test|stop}"
     exit 1
     ;;
 esac
