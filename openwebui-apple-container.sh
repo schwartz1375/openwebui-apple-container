@@ -164,8 +164,7 @@ run_container() {
   publish="$(publish_arg "$OWUI_PORTS")"
   echo "Publishing ports: $publish (from '$OWUI_PORTS', style: ${OWUI_PUBLISH_STYLE:-host:container})"
   
-  # Try --publish first (0.6.0), fallback to --port (0.5.0)
-  if ! container run \
+  container run \
     --detach \
     --name "$OWUI_NAME" \
     --publish "$publish" \
@@ -173,18 +172,7 @@ run_container() {
     --env OLLAMA_BASE_URL="$url" \
     --memory 2G \
     --cpus 2 \
-    "$OWUI_IMAGE" 2>/dev/null; then
-    echo "Retrying with --port syntax for older versions..."
-    container run \
-      --detach \
-      --name "$OWUI_NAME" \
-      --port "$publish" \
-      --volume "$OWUI_DATA:/app/backend/data" \
-      --env OLLAMA_BASE_URL="$url" \
-      --memory 2G \
-      --cpus 2 \
-      "$OWUI_IMAGE"
-  fi
+    "$OWUI_IMAGE"
 
   # Try to detect which host port is actually serving, to handle
   # potential publish order changes between container versions.

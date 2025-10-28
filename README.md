@@ -15,7 +15,9 @@ This repo provides a concise guide and helper script for running Open-WebUI usin
 ## Requirements
 
 - macOS 26 or later.
-- Apple `container` installed from Apple’s [GitHub](https://github.com/schwartz1375/openwebui-apple-container).
+- Apple `container` installed (via Homebrew or GitHub):
+  - Homebrew: `brew install --cask container` (https://formulae.brew.sh/cask/container)
+  - Or from Apple’s [GitHub](https://github.com/schwartz1375/openwebui-apple-container)
 - Ollama installed on the host (and configured to accept LAN connections).
 
 See `AppleContainerization.md` for background, trade‑offs, and networking context.
