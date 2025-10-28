@@ -37,8 +37,12 @@ container run \
   --publish 3000:8080 \
   --volume "$HOME/.open-webui:/app/backend/data" \
   --env OLLAMA_BASE_URL="http://$IP:11434" \
+  --memory 2G \
+  --cpus 2 \
   ghcr.io/open-webui/open-webui:main
 ```
+
+📌 **Container 0.6.0 Note:** Apple Container 0.6.0 changed from `--port` to `--publish` for port mapping. The example above uses the newer syntax. For older versions (0.5.0), replace `--publish` with `--port`.
 
 📌 **Important:** In the Ollama app settings, enable *“Expose Ollama to the network”*.
 
@@ -59,7 +63,7 @@ By leveraging Apple’s own tooling, developers gain clear workload separation t
 ### What’s Missing
 
 Ecosystem support is still early. Tools like Watchtower or Compose aren’t available, restart policies are limited, and shortcuts like `host.docker.internal` don’t work. Updates and orchestration currently require manual steps.
-
+📌 **Container 0.6.0 Updates:** Recent improvements include better resource management with `--memory` and `--cpus` flags, enhanced port publishing with `--publish`, and improved image pruning (though `container image prune` no longer accepts `-f` and may require timeouts).
 ---
 
 ### Looking Ahead
