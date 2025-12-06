@@ -33,6 +33,8 @@ The script wraps common tasks for running Open‑WebUI with Apple `container` wh
 ./openwebui-apple-container.sh test   # quick connectivity test to Ollama
 ```
 
+The script will start the Apple container system automatically if it is not already running.
+
 Optional environment overrides:
 
 ```

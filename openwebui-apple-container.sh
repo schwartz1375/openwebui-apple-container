@@ -138,7 +138,26 @@ publish_arg() {
   esac
 }
 
+# --- helper: ensure Apple container system is running ---
+ensure_container_system() {
+  if container system status >/dev/null 2>&1; then
+    return
+  fi
+  echo "Apple Container system is not running; starting..."
+  container system start >/dev/null 2>&1 || container system start
+  for i in {1..15}; do
+    if container system status >/dev/null 2>&1; then
+      echo "Apple Container system started."
+      return
+    fi
+    sleep 1
+  done
+  echo "ERROR: Apple Container system did not reach running state."
+  exit 1
+}
+
 run_container() {
+  ensure_container_system
   check_container_version
   local url="${OLLAMA_URL:-$(pick_host_url)}"
   mkdir -p "$OWUI_DATA"
@@ -207,6 +226,7 @@ run_container() {
 }
 
 update_container() {
+  ensure_container_system
   # pull latest image and recreate if digest changed
   echo "Pulling: $OWUI_IMAGE"
   container image pull "$OWUI_IMAGE" >/dev/null
@@ -272,10 +292,12 @@ PY
 }
 
 logs_container() {
+  ensure_container_system
   container logs -f "$OWUI_NAME"
 }
 
 test_connectivity() {
+  ensure_container_system
   local url="${OLLAMA_URL:-$(pick_host_url)}"
   echo "Testing Ollama at: $url"
   echo "First 200 bytes of /api/tags:"
@@ -283,6 +305,7 @@ test_connectivity() {
 }
 
 stop_container() {
+  ensure_container_system
   echo "Stopping Open-WebUI container..."
   container stop "$OWUI_NAME" 2>/dev/null || echo "Container '$OWUI_NAME' not running"
   container rm "$OWUI_NAME" 2>/dev/null || echo "Container '$OWUI_NAME' not found"
