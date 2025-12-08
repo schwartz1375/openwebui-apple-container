@@ -148,11 +148,16 @@ ensure_container_system() {
   for i in {1..15}; do
     if container system status >/dev/null 2>&1; then
       echo "Apple Container system started."
+      sleep 2  # Give socket time to fully initialize (container 0.7.1)
       return
     fi
     sleep 1
   done
   echo "ERROR: Apple Container system did not reach running state."
+  echo "If you see 'Socket is not connected' errors, try manually restarting:"
+  echo "  container system stop"
+  echo "  container system start"
+  echo "  $0 run"
   exit 1
 }
 
